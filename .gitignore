@@ -1,0 +1,24 @@
+# Banco de dados local (dados pessoais, não versionar)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+*.db
+
+# Segredos / configuração local
+.env
+.env.*
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
