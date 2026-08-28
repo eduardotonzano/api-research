@@ -102,18 +102,43 @@ db/
 tests/
   test_db.py            # pytest: inserção, dedupe, histórico, concorrência, dados malformados
 data/                    # banco SQLite local (gitignored)
+
+fetch/
+  google_news.py         # busca via Google News RSS (sem chave)
+  portal_feeds.py         # feeds fixos de portais financeiros, filtrados por palavra-chave
+  extractor.py             # resolve redirect + extrai texto/data com trafilatura
+  hashing.py                # content_hash usado no dedupe da Fase 1
+run_search.py               # CLI: empresa + tópico -> busca -> extrai -> grava no banco
+tests/
+  test_fetch.py             # pytest: parsing, dedupe, extração e pipeline (tudo mockado)
 ```
 
 ## Rodando os testes
 
 ```bash
 pip install -r requirements.txt
-python3 -m pytest tests/ -v
+python3 -m pytest tests/ -v          # não bate rede real (marker "network" fica de fora)
+python3 -m pytest tests/ -m network  # só o smoke test contra o Google News de verdade
 ```
+
+## Rodando uma busca (Fase 2)
+
+```bash
+python3 run_search.py "Petrobras" "resultados" --ticker PETR4
+```
+
+⚠️ **Limite descoberto durante a Fase 2**: esta sessão remota (sandbox) só tem
+saída de rede liberada pra um allowlist de hosts de desenvolvimento (PyPI,
+GitHub, APIs da Anthropic) — `news.google.com` e os feeds de portais retornam
+403 no proxy daqui. Não tem alternativa gratuita que resolva isso *dentro
+desta sessão*: o código foi escrito e testado com HTTP/trafilatura mockados
+(cobrindo parsing, dedupe e falha de extração), mas a validação contra a
+internet real precisa ser feita na sua máquina/ambiente, onde a rede não é
+restrita. Se algo no formato real do RSS do Google News divergir do que
+mockei nos testes, é o primeiro lugar pra olhar.
 
 ## Próximas fases (não iniciadas)
 
-2. Busca e extração de notícias (Google News RSS, feeds, `trafilatura`).
 3. Resumo automático (free tier de LLM, ex: Groq).
 4. Comparação de histórico / detecção de notícia nova (via `get_new_since_last_search`).
 5. Layout de saída (terminal ou HTML).
