@@ -22,6 +22,11 @@ PORTAL_FEEDS = {
     "InfoMoney": "https://www.infomoney.com.br/feed/",
     "Money Times": "https://www.moneytimes.com.br/feed/",
     "Suno Notícias": "https://www.suno.com.br/noticias/feed/",
+    # Investing.com não tem busca por empresa gratuita (a página de busca é
+    # protegida por anti-bot) — usamos os feeds de categoria que eles mesmos
+    # publicam pra sindicação, filtrados por palavra-chave como os demais.
+    "Investing.com": "https://www.investing.com/rss/news.rss",
+    "Investing.com - Ações": "https://www.investing.com/rss/stock_Stock-Market-News.rss",
 }
 
 

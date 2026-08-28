@@ -9,6 +9,12 @@ from fetch.extractor import ExtractionResult, extract_article, resolve_final_url
 from fetch.google_news import RssItem, _clean_title, _parse_rss, build_query, fetch_google_news
 from fetch.hashing import compute_content_hash
 from fetch.portal_feeds import FeedItem, matches_keywords, search_portal_feeds
+from fetch.yahoo_finance import (
+    YahooNewsItem,
+    fetch_yahoo_finance_news,
+    normalize_ticker_for_yahoo,
+    search_yahoo_finance,
+)
 
 SAMPLE_GOOGLE_NEWS_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -47,6 +53,24 @@ SAMPLE_PORTAL_RSS = """<?xml version="1.0" encoding="UTF-8"?>
       <title>Selic: o que esperar da próxima reunião do Copom</title>
       <link>https://www.infomoney.com.br/selic-copom/</link>
       <pubDate>Wed, 19 Aug 2026 08:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+SAMPLE_YAHOO_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Yahoo! Finance: PETR4.SA News</title>
+    <item>
+      <title>Petrobras (PETR4.SA) reports record quarterly profit</title>
+      <link>https://finance.yahoo.com/news/petrobras-record-profit.html</link>
+      <pubDate>Thu, 20 Aug 2026 11:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Petrobras announces new dividend policy</title>
+      <link>https://finance.yahoo.com/news/petrobras-dividend-policy.html</link>
+      <pubDate>Fri, 21 Aug 2026 09:00:00 GMT</pubDate>
     </item>
   </channel>
 </rss>
@@ -160,6 +184,37 @@ def test_matches_keywords_is_case_insensitive():
     assert not matches_keywords(item, ["vale"])
 
 
+# --- Yahoo Finance ---
+
+
+def test_normalize_ticker_for_yahoo_adds_sa_suffix_for_b3_tickers():
+    assert normalize_ticker_for_yahoo("petr4") == "PETR4.SA"
+
+
+def test_normalize_ticker_for_yahoo_respects_existing_suffix():
+    assert normalize_ticker_for_yahoo("AAPL.US") == "AAPL.US"
+
+
+def test_fetch_yahoo_finance_news_parses_feed():
+    session = FakeSession(FakeResponse(text=SAMPLE_YAHOO_RSS))
+    items = fetch_yahoo_finance_news("PETR4", session=session)
+    assert len(items) == 2
+    assert items[0].source == "Yahoo Finance"
+
+
+def test_search_yahoo_finance_filters_by_topic():
+    session = FakeSession(FakeResponse(text=SAMPLE_YAHOO_RSS))
+    items = search_yahoo_finance("PETR4", "dividend", session=session)
+    assert len(items) == 1
+    assert "dividend policy" in items[0].title.lower()
+
+
+def test_search_yahoo_finance_without_topic_returns_everything():
+    session = FakeSession(FakeResponse(text=SAMPLE_YAHOO_RSS))
+    items = search_yahoo_finance("PETR4", "", session=session)
+    assert len(items) == 2
+
+
 # --- Hash de conteúdo ---
 
 
@@ -250,6 +305,11 @@ def test_run_search_pipeline_saves_and_dedupes(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setattr(
         run_search,
+        "search_yahoo_finance",
+        lambda ticker, topic, market_suffix=".SA": [],
+    )
+    monkeypatch.setattr(
+        run_search,
         "extract_article",
         lambda url: ExtractionResult(
             final_url=url,
@@ -273,6 +333,63 @@ def test_run_search_pipeline_saves_and_dedupes(tmp_path: Path, monkeypatch):
     conn.close()
 
 
+def test_run_search_includes_yahoo_finance_when_ticker_given(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "pipeline_yahoo.db"
+    conn = init_db(db_path)
+
+    yahoo_items = [
+        YahooNewsItem(
+            title="Petrobras reports record quarterly profit",
+            link="https://finance.yahoo.com/news/petrobras-record-profit.html",
+            published_at="Thu, 20 Aug 2026 11:00:00 GMT",
+        ),
+    ]
+
+    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: [])
+    monkeypatch.setattr(
+        run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(
+        run_search,
+        "search_yahoo_finance",
+        lambda ticker, topic, market_suffix=".SA": yahoo_items,
+    )
+    monkeypatch.setattr(
+        run_search,
+        "extract_article",
+        lambda url: ExtractionResult(final_url=url, text="lucro recorde", published_at=None),
+    )
+
+    stats = run_search.run_search(
+        conn, "Petrobras", "resultados", ticker="PETR4", delay_seconds=0
+    )
+
+    assert stats["found"] == 1
+    row = conn.execute("SELECT source FROM news").fetchone()
+    assert row["source"] == "Yahoo Finance"
+
+    conn.close()
+
+
+def test_run_search_skips_yahoo_finance_without_ticker(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "pipeline_no_ticker.db"
+    conn = init_db(db_path)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("search_yahoo_finance não deveria ser chamado sem ticker")
+
+    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: [])
+    monkeypatch.setattr(
+        run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(run_search, "search_yahoo_finance", fail_if_called)
+
+    stats = run_search.run_search(conn, "Petrobras", "resultados", ticker=None, delay_seconds=0)
+
+    assert stats["found"] == 0
+    conn.close()
+
+
 def test_run_search_continues_when_extraction_fails(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "pipeline_fail.db"
     conn = init_db(db_path)
@@ -289,6 +406,11 @@ def test_run_search_continues_when_extraction_fails(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: rss_items)
     monkeypatch.setattr(
         run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(
+        run_search,
+        "search_yahoo_finance",
+        lambda ticker, topic, market_suffix=".SA": [],
     )
 
     def fake_extract(url):

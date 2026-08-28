@@ -23,6 +23,7 @@ from fetch.extractor import extract_article
 from fetch.google_news import fetch_google_news
 from fetch.hashing import compute_content_hash
 from fetch.portal_feeds import search_portal_feeds
+from fetch.yahoo_finance import search_yahoo_finance
 
 # Delay entre extrações de artigo (não entre a busca do RSS em si), pra não
 # martelar os sites de origem com requisições em sequência.
@@ -35,11 +36,12 @@ def run_search(
     topic: str,
     ticker: str | None = None,
     *,
+    yahoo_market_suffix: str = ".SA",
     delay_seconds: float = DELAY_BETWEEN_EXTRACTIONS_SECONDS,
 ) -> dict:
     company_id = get_or_create_company(conn, company, ticker)
     topic_id = get_or_create_topic(conn, topic)
-    search_id = create_search(conn, company_id, topic_id, source="google_news+portais")
+    search_id = create_search(conn, company_id, topic_id, source="google_news+portais+yahoo")
 
     try:
         rss_items = fetch_google_news(company, topic)
@@ -53,7 +55,21 @@ def run_search(
         print(f"Aviso: falha ao buscar feeds de portais: {exc}", file=sys.stderr)
         portal_items = []
 
-    all_items = list(rss_items) + list(portal_items)
+    yahoo_items = []
+    if ticker:
+        try:
+            yahoo_items = search_yahoo_finance(
+                ticker, topic, market_suffix=yahoo_market_suffix
+            )
+        except Exception as exc:
+            print(f"Aviso: falha ao buscar Yahoo Finance: {exc}", file=sys.stderr)
+    else:
+        print(
+            "Aviso: sem ticker informado, pulando Yahoo Finance (a busca lá é por ticker).",
+            file=sys.stderr,
+        )
+
+    all_items = list(rss_items) + list(portal_items) + list(yahoo_items)
 
     saved = 0
     failed_extractions = 0
@@ -104,11 +120,22 @@ def main() -> None:
     parser.add_argument("company", help="Nome da empresa (ex: Petrobras)")
     parser.add_argument("topic", help="Tópico de busca (ex: resultados)")
     parser.add_argument("--ticker", default=None, help="Ticker da empresa (ex: PETR4)")
+    parser.add_argument(
+        "--yahoo-market-suffix",
+        default=".SA",
+        help="Sufixo de bolsa pro Yahoo Finance (padrão .SA, da B3; use vazio pra tickers dos EUA)",
+    )
     args = parser.parse_args()
 
     conn = init_db()
     try:
-        stats = run_search(conn, args.company, args.topic, ticker=args.ticker)
+        stats = run_search(
+            conn,
+            args.company,
+            args.topic,
+            ticker=args.ticker,
+            yahoo_market_suffix=args.yahoo_market_suffix,
+        )
     finally:
         conn.close()
 

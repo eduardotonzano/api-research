@@ -105,13 +105,23 @@ data/                    # banco SQLite local (gitignored)
 
 fetch/
   google_news.py         # busca via Google News RSS (sem chave)
-  portal_feeds.py         # feeds fixos de portais financeiros, filtrados por palavra-chave
-  extractor.py             # resolve redirect + extrai texto/data com trafilatura
-  hashing.py                # content_hash usado no dedupe da Fase 1
-run_search.py               # CLI: empresa + tópico -> busca -> extrai -> grava no banco
+  portal_feeds.py         # feeds fixos (InfoMoney, Money Times, Suno, Investing.com), filtrados por palavra-chave
+  yahoo_finance.py         # RSS do Yahoo Finance por ticker, filtrado por tópico
+  extractor.py               # resolve redirect + extrai texto/data com trafilatura
+  hashing.py                  # content_hash usado no dedupe da Fase 1
+run_search.py                 # CLI: empresa + tópico -> busca -> extrai -> grava no banco
 tests/
-  test_fetch.py             # pytest: parsing, dedupe, extração e pipeline (tudo mockado)
+  test_fetch.py               # pytest: parsing, dedupe, extração e pipeline (tudo mockado)
 ```
+
+### Fontes de notícia
+
+| Fonte | Como busca | Observação |
+|---|---|---|
+| Google News RSS | palavra-chave livre (empresa + tópico) | a mais flexível, cobre qualquer termo |
+| Portais (InfoMoney, Money Times, Suno) | feed fixo, filtrado por palavra-chave no título | não é busca de verdade — só pega o que estiver no feed recente |
+| **Investing.com** | feed de categoria (`/rss/news.rss`, `/rss/stock_Stock-Market-News.rss`), filtrado por palavra-chave | ⚠️ não existe API/busca gratuita por empresa no Investing.com — a página de busca é protegida por anti-bot (Cloudflare). Uso os feeds RSS que eles mesmos publicam pra sindicação, no mesmo esquema dos outros portais. Cobertura menor que uma busca dedicada |
+| **Yahoo Finance** | RSS por ticker, filtrado por tópico no título | precisa de `ticker` (é pulado se a empresa não tiver um). Tickers da B3 (ex: PETR4) recebem sufixo `.SA` automaticamente — ajustável via `--yahoo-market-suffix` |
 
 ## Rodando os testes
 
