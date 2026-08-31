@@ -101,6 +101,22 @@ def add_news(
         return row["id"]
 
 
+def get_existing_summary(
+    conn: sqlite3.Connection, url: str, content_hash: str | None = None
+) -> str | None:
+    """Resumo já salvo pra essa notícia (por url ou content_hash), se existir.
+
+    Usado antes de chamar o LLM: se a mesma notícia já foi resumida numa busca
+    anterior, reaproveita em vez de gastar cota da Groq/Gemini de novo.
+    """
+    row = conn.execute("SELECT summary FROM news WHERE url = ?", (url,)).fetchone()
+    if row is None and content_hash is not None:
+        row = conn.execute(
+            "SELECT summary FROM news WHERE content_hash = ?", (content_hash,)
+        ).fetchone()
+    return row["summary"] if row is not None else None
+
+
 def link_search_news(
     conn: sqlite3.Connection,
     search_id: int,

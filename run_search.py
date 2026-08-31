@@ -15,6 +15,7 @@ from db.connection import init_db
 from db.queries import (
     add_news,
     create_search,
+    get_existing_summary,
     get_or_create_company,
     get_or_create_topic,
     link_search_news,
@@ -24,6 +25,7 @@ from fetch.google_news import fetch_google_news
 from fetch.hashing import compute_content_hash
 from fetch.portal_feeds import search_portal_feeds
 from fetch.yahoo_finance import search_yahoo_finance
+from summarize import summarize_article
 
 # Delay entre extrações de artigo (não entre a busca do RSS em si), pra não
 # martelar os sites de origem com requisições em sequência.
@@ -73,6 +75,7 @@ def run_search(
 
     saved = 0
     failed_extractions = 0
+    summarized = 0
 
     for item in all_items:
         try:
@@ -83,6 +86,7 @@ def run_search(
         final_url = item.link
         final_published_at = item.published_at
         content_hash = None
+        summary = None
 
         if result is not None:
             final_url = result.final_url
@@ -90,6 +94,15 @@ def run_search(
             content_hash = compute_content_hash(item.title, result.text)
             if result.text is None:
                 failed_extractions += 1
+            else:
+                summary = get_existing_summary(conn, final_url, content_hash)
+                if not summary:
+                    try:
+                        summary = summarize_article(item.title, result.text)
+                    except Exception as exc:
+                        print(f"Aviso: falha ao resumir '{item.title}': {exc}", file=sys.stderr)
+                if summary:
+                    summarized += 1
         else:
             failed_extractions += 1
 
@@ -100,6 +113,7 @@ def run_search(
             title=item.title,
             source=item.source,
             published_at=final_published_at,
+            summary=summary,
         )
         link_search_news(conn, search_id, news_id)
         saved += 1
@@ -112,6 +126,7 @@ def run_search(
         "found": len(all_items),
         "saved": saved,
         "failed_extractions": failed_extractions,
+        "summarized": summarized,
     }
 
 
@@ -141,7 +156,8 @@ def main() -> None:
 
     print(
         f"Busca concluída: {stats['found']} notícias encontradas, {stats['saved']} salvas "
-        f"({stats['failed_extractions']} sem extração completa de texto)."
+        f"({stats['failed_extractions']} sem extração completa de texto, "
+        f"{stats['summarized']} resumidas)."
     )
 
 

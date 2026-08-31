@@ -147,9 +147,40 @@ internet real precisa ser feita na sua máquina/ambiente, onde a rede não é
 restrita. Se algo no formato real do RSS do Google News divergir do que
 mockei nos testes, é o primeiro lugar pra olhar.
 
+## Resumo automático (Fase 3)
+
+```
+summarize/
+  groq_provider.py    # LLM gratuito, sem cartão — fonte primária
+  gemini_provider.py   # Google Gemini (AI Studio), fallback gratuito se a Groq falhar
+  summarizer.py          # tenta Groq, cai pro Gemini, senão devolve None
+tests/
+  test_summarize.py       # pytest: providers e orquestração, tudo com HTTP mockado
+```
+
+Configure as chaves (nenhuma exige cartão de crédito):
+
+```bash
+cp .env.example .env   # preencha GROQ_API_KEY e, opcionalmente, GEMINI_API_KEY
+set -a; source .env; set +a
+python3 run_search.py "Petrobras" "resultados" --ticker PETR4
+```
+
+- **Ordem**: tenta a Groq primeiro; se não tiver chave, estourar rate limit (HTTP 429,
+  com retry/backoff respeitando `Retry-After`) ou falhar, cai pro Gemini.
+- **Sem nenhuma das duas chaves, ou se ambas falharem**: a notícia é salva do
+  mesmo jeito, só com `summary = NULL` — mesmo padrão de degradação graciosa
+  da extração de texto (Fase 2). Nunca trava a busca.
+- **Cota**: antes de chamar o LLM, `get_existing_summary` (`db/queries.py`)
+  confere se aquela notícia (por `url` ou `content_hash`) já foi resumida numa
+  busca anterior — evita gastar cota resumindo a mesma matéria de novo.
+- ⚠️ Os limites de rate limit do free tier (requisições/minuto, tokens/minuto)
+  mudam com frequência em ambos os provedores. Confira o valor atual antes de
+  rodar em volume: [Groq](https://console.groq.com/settings/limits) /
+  [Gemini](https://ai.google.dev/gemini-api/docs/rate-limits).
+
 ## Próximas fases (não iniciadas)
 
-3. Resumo automático (free tier de LLM, ex: Groq).
 4. Comparação de histórico / detecção de notícia nova (via `get_new_since_last_search`).
 5. Layout de saída (terminal ou HTML).
 

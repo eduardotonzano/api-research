@@ -390,6 +390,115 @@ def test_run_search_skips_yahoo_finance_without_ticker(tmp_path: Path, monkeypat
     conn.close()
 
 
+def test_run_search_saves_summary_when_available(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "pipeline_summary.db"
+    conn = init_db(db_path)
+
+    rss_items = [
+        RssItem(
+            title="Petrobras anuncia lucro recorde no trimestre",
+            link="https://news.google.com/rss/articles/abc",
+            published_at="Thu, 20 Aug 2026 10:00:00 GMT",
+            source="Valor Econômico",
+        ),
+    ]
+
+    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: rss_items)
+    monkeypatch.setattr(
+        run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(
+        run_search, "search_yahoo_finance", lambda ticker, topic, market_suffix=".SA": []
+    )
+    monkeypatch.setattr(
+        run_search,
+        "extract_article",
+        lambda url: ExtractionResult(
+            final_url=url, text="A Petrobras divulgou lucro recorde.", published_at="2026-08-20"
+        ),
+    )
+    monkeypatch.setattr(run_search, "summarize_article", lambda title, text: "Resumo gerado pelo LLM.")
+
+    stats = run_search.run_search(
+        conn, "Petrobras", "resultados", ticker="PETR4", delay_seconds=0
+    )
+
+    assert stats["summarized"] == 1
+    row = conn.execute("SELECT summary FROM news").fetchone()
+    assert row["summary"] == "Resumo gerado pelo LLM."
+
+    conn.close()
+
+
+def test_run_search_reuses_existing_summary_instead_of_calling_llm_again(
+    tmp_path: Path, monkeypatch
+):
+    db_path = tmp_path / "pipeline_summary_reuse.db"
+    conn = init_db(db_path)
+
+    call_count = {"n": 0}
+
+    def fake_summarize(title, text):
+        call_count["n"] += 1
+        return f"Resumo #{call_count['n']}"
+
+    monkeypatch.setattr(
+        run_search, "search_yahoo_finance", lambda ticker, topic, market_suffix=".SA": []
+    )
+    monkeypatch.setattr(run_search, "summarize_article", fake_summarize)
+
+    same_text = "A Petrobras divulgou lucro recorde no trimestre, superando expectativas."
+
+    # primeira busca: notícia nova, chama o LLM
+    monkeypatch.setattr(
+        run_search,
+        "fetch_google_news",
+        lambda company, topic: [
+            RssItem(
+                title="Petrobras anuncia lucro recorde",
+                link="https://news.google.com/rss/articles/primeira",
+                published_at="Thu, 20 Aug 2026 10:00:00 GMT",
+                source="Valor Econômico",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(
+        run_search,
+        "extract_article",
+        lambda url: ExtractionResult(final_url=url, text=same_text, published_at="2026-08-20"),
+    )
+
+    run_search.run_search(conn, "Petrobras", "resultados", ticker="PETR4", delay_seconds=0)
+    assert call_count["n"] == 1
+
+    # segunda busca: mesmo conteúdo (mesmo content_hash), URL diferente -> não deve
+    # chamar o LLM de novo, só reaproveitar o resumo já salvo
+    monkeypatch.setattr(
+        run_search,
+        "fetch_google_news",
+        lambda company, topic: [
+            RssItem(
+                title="Petrobras anuncia lucro recorde",
+                link="https://outraportal.com/petrobras-lucro-recorde",
+                published_at="Fri, 21 Aug 2026 08:00:00 GMT",
+                source="InfoMoney",
+            )
+        ],
+    )
+
+    run_search.run_search(conn, "Petrobras", "resultados", ticker="PETR4", delay_seconds=0)
+
+    assert call_count["n"] == 1  # não incrementou: reaproveitou o resumo existente
+
+    summaries = {row["summary"] for row in conn.execute("SELECT summary FROM news").fetchall()}
+    assert summaries == {"Resumo #1"}
+
+    conn.close()
+
+
 def test_run_search_continues_when_extraction_fails(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "pipeline_fail.db"
     conn = init_db(db_path)

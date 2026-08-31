@@ -8,6 +8,7 @@ data/*.db-shm
 # Segredos / configuração local
 .env
 .env.*
+!.env.example
 *.key
 
 # Python
