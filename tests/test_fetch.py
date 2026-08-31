@@ -323,6 +323,8 @@ def test_run_search_pipeline_saves_and_dedupes(tmp_path: Path, monkeypatch):
     )
 
     assert stats["found"] == 2
+    assert isinstance(stats["company_id"], int)
+    assert isinstance(stats["topic_id"], int)
     # mesmo conteúdo (mesmo texto extraído) em URLs diferentes -> dedupe por content_hash
     news_count = conn.execute("SELECT COUNT(*) AS c FROM news").fetchone()["c"]
     assert news_count == 1

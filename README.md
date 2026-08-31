@@ -179,9 +179,34 @@ python3 run_search.py "Petrobras" "resultados" --ticker PETR4
   rodar em volume: [Groq](https://console.groq.com/settings/limits) /
   [Gemini](https://ai.google.dev/gemini-api/docs/rate-limits).
 
+## Comparação de histórico / notícia nova (Fase 4)
+
+```
+reporting.py    # formata "notícias novas desde a última busca" (texto puro por enquanto)
+whats_new.py      # CLI: lê o banco, não busca nada na rede
+tests/
+  test_reporting.py
+  test_whats_new.py
+```
+
+A query em si (`get_new_since_last_search`, `db/queries.py`) já existia desde
+a Fase 1 — Fase 4 só expõe ela de dois jeitos:
+
+1. **Automático**: `run_search.py` já mostra o que é novo ao final de cada busca
+   (compara a busca que acabou de rodar com as anteriores do mesmo par empresa+tópico).
+2. **Sob demanda, sem gastar busca/cota**: `whats_new.py` lê só o que já está
+   salvo, sem tocar em rede/RSS/LLM — útil pra conferir de novo sem refazer a busca.
+
+```bash
+python3 whats_new.py "Petrobras" "resultados"   # um par específico
+python3 whats_new.py --all                       # todos os pares já buscados
+```
+
+Diferente das Fases 2 e 3, essa é só lógica de banco — dá pra rodar e validar
+de ponta a ponta mesmo sem acesso à rede externa.
+
 ## Próximas fases (não iniciadas)
 
-4. Comparação de histórico / detecção de notícia nova (via `get_new_since_last_search`).
 5. Layout de saída (terminal ou HTML).
 
 Cada fase só começa após aprovação explícita e com os testes da fase anterior

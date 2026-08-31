@@ -16,6 +16,7 @@ from db.queries import (
     add_news,
     create_search,
     get_existing_summary,
+    get_new_since_last_search,
     get_or_create_company,
     get_or_create_topic,
     link_search_news,
@@ -25,6 +26,7 @@ from fetch.google_news import fetch_google_news
 from fetch.hashing import compute_content_hash
 from fetch.portal_feeds import search_portal_feeds
 from fetch.yahoo_finance import search_yahoo_finance
+from reporting import format_new_items
 from summarize import summarize_article
 
 # Delay entre extrações de artigo (não entre a busca do RSS em si), pra não
@@ -123,6 +125,8 @@ def run_search(
 
     return {
         "search_id": search_id,
+        "company_id": company_id,
+        "topic_id": topic_id,
         "found": len(all_items),
         "saved": saved,
         "failed_extractions": failed_extractions,
@@ -151,14 +155,18 @@ def main() -> None:
             ticker=args.ticker,
             yahoo_market_suffix=args.yahoo_market_suffix,
         )
+
+        print(
+            f"Busca concluída: {stats['found']} notícias encontradas, {stats['saved']} salvas "
+            f"({stats['failed_extractions']} sem extração completa de texto, "
+            f"{stats['summarized']} resumidas)."
+        )
+
+        new_items = get_new_since_last_search(conn, stats["company_id"], stats["topic_id"])
+        print()
+        print(format_new_items(args.company, args.topic, new_items))
     finally:
         conn.close()
-
-    print(
-        f"Busca concluída: {stats['found']} notícias encontradas, {stats['saved']} salvas "
-        f"({stats['failed_extractions']} sem extração completa de texto, "
-        f"{stats['summarized']} resumidas)."
-    )
 
 
 if __name__ == "__main__":
