@@ -78,12 +78,15 @@ def run_search(
         )
 
     all_items = list(rss_items) + list(portal_items) + list(yahoo_items)
+    total_items = len(all_items)
+    print(f"{total_items} notícia(s) encontrada(s), processando uma por uma...")
 
     saved = 0
     failed_extractions = 0
     summarized = 0
 
-    for item in all_items:
+    for index, item in enumerate(all_items, start=1):
+        print(f"[{index}/{total_items}] {item.title}")
         try:
             result = extract_article(item.link)
         except Exception:
