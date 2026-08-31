@@ -14,11 +14,12 @@ import webbrowser
 from pathlib import Path
 
 from db.connection import init_db
+from date_utils import filter_recent_items
 from db.queries import (
     add_news,
     create_search,
     get_existing_summary,
-    get_new_since_last_search,
+    get_latest_search_news,
     get_or_create_company,
     get_or_create_topic,
     link_search_news,
@@ -36,6 +37,11 @@ DEFAULT_REPORT_PATH = Path(__file__).resolve().parent / "reports" / "latest_sear
 # Delay entre extrações de artigo (não entre a busca do RSS em si), pra não
 # martelar os sites de origem com requisições em sequência.
 DELAY_BETWEEN_EXTRACTIONS_SECONDS = 1.0
+
+# Notícia mais velha que isso não aparece no relatório de "atual" — evita que
+# uma matéria de meses atrás, achada só por coincidência de palavra-chave,
+# polua o que deveria ser um retrato do que é relevante agora.
+DEFAULT_MAX_AGE_DAYS = 45
 
 
 def run_search(
@@ -158,6 +164,12 @@ def main() -> None:
     parser.add_argument(
         "--open", action="store_true", help="Abre o relatório no navegador ao final"
     )
+    parser.add_argument(
+        "--max-age-days",
+        type=int,
+        default=DEFAULT_MAX_AGE_DAYS,
+        help=f"Idade máxima (em dias) pra uma notícia aparecer no relatório (padrão {DEFAULT_MAX_AGE_DAYS})",
+    )
     args = parser.parse_args()
 
     conn = init_db()
@@ -176,10 +188,11 @@ def main() -> None:
             f"{stats['summarized']} resumidas)."
         )
 
-        new_items = get_new_since_last_search(conn, stats["company_id"], stats["topic_id"])
-        group_html = render_group_html(args.company, args.topic, new_items)
+        current_items = get_latest_search_news(conn, stats["company_id"], stats["topic_id"])
+        current_items = filter_recent_items(current_items, max_age_days=args.max_age_days)
+        group_html = render_group_html(args.company, args.topic, current_items)
         page_html = render_report_page(
-            [group_html], title=f"Novidades: {args.company} + {args.topic}"
+            [group_html], title=f"{args.company} + {args.topic}"
         )
         report_path = write_report(DEFAULT_REPORT_PATH, page_html)
         print(f"Relatório: {report_path}")

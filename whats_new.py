@@ -19,40 +19,16 @@ from html import escape
 from pathlib import Path
 
 from db.connection import init_db
-from db.queries import get_new_since_last_search
+from db.queries import (
+    get_new_since_last_search,
+    list_searched_pairs,
+    lookup_company_id,
+    lookup_topic_id,
+)
 from report_html import render_group_html, render_report_page, write_report
 from reporting import format_new_items
 
 DEFAULT_REPORT_PATH = Path(__file__).resolve().parent / "reports" / "whats_new.html"
-
-
-def _list_searched_pairs(conn: sqlite3.Connection) -> list[tuple[int, str, int, str]]:
-    """Todos os pares (empresa, tópico) que já tiveram pelo menos uma busca."""
-    rows = conn.execute(
-        """
-        SELECT DISTINCT c.id AS company_id, c.name AS company_name,
-               t.id AS topic_id, t.name AS topic_name
-        FROM searches s
-        JOIN companies c ON c.id = s.company_id
-        JOIN topics t ON t.id = s.topic_id
-        ORDER BY c.name, t.name
-        """
-    ).fetchall()
-    return [(r["company_id"], r["company_name"], r["topic_id"], r["topic_name"]) for r in rows]
-
-
-def _lookup_company_id(conn: sqlite3.Connection, company_name: str) -> int | None:
-    row = conn.execute(
-        "SELECT id FROM companies WHERE name = ? COLLATE NOCASE", (company_name,)
-    ).fetchone()
-    return row["id"] if row is not None else None
-
-
-def _lookup_topic_id(conn: sqlite3.Connection, topic_name: str) -> int | None:
-    row = conn.execute(
-        "SELECT id FROM topics WHERE name = ? COLLATE NOCASE", (topic_name,)
-    ).fetchone()
-    return row["id"] if row is not None else None
 
 
 def get_new_for_pair(
@@ -60,11 +36,11 @@ def get_new_for_pair(
 ) -> tuple[bool, str]:
     """Retorna (encontrado, texto formatado). encontrado=False quando a empresa
     ou o tópico nunca foram buscados antes (não dá pra comparar o que nunca existiu)."""
-    company_id = _lookup_company_id(conn, company_name)
+    company_id = lookup_company_id(conn, company_name)
     if company_id is None:
         return False, f"Empresa '{company_name}' nunca foi buscada."
 
-    topic_id = _lookup_topic_id(conn, topic_name)
+    topic_id = lookup_topic_id(conn, topic_name)
     if topic_id is None:
         return False, f"Tópico '{topic_name}' nunca foi buscado."
 
@@ -73,7 +49,7 @@ def get_new_for_pair(
 
 
 def get_new_for_all_pairs(conn: sqlite3.Connection) -> str:
-    pairs = _list_searched_pairs(conn)
+    pairs = list_searched_pairs(conn)
     if not pairs:
         return "Nenhuma busca feita ainda."
 
@@ -88,29 +64,34 @@ def build_report_html_for_pair(
     conn: sqlite3.Connection, company_name: str, topic_name: str
 ) -> tuple[bool, str]:
     """Mesma lógica de get_new_for_pair, mas devolvendo a página HTML (Fase 5)."""
-    company_id = _lookup_company_id(conn, company_name)
+    company_id = lookup_company_id(conn, company_name)
     if company_id is None:
         message = f"Empresa '{company_name}' nunca foi buscada."
         page = render_report_page([f'<p class="empty">{escape(message)}</p>'])
         return False, page
 
-    topic_id = _lookup_topic_id(conn, topic_name)
+    topic_id = lookup_topic_id(conn, topic_name)
     if topic_id is None:
         message = f"Tópico '{topic_name}' nunca foi buscado."
         page = render_report_page([f'<p class="empty">{escape(message)}</p>'])
         return False, page
 
     items = get_new_since_last_search(conn, company_id, topic_id)
-    group = render_group_html(company_name, topic_name, items)
+    group = render_group_html(
+        company_name, topic_name, items, empty_message="Nada novo desde a última busca."
+    )
     page = render_report_page([group], title=f"Novidades: {company_name} + {topic_name}")
     return True, page
 
 
 def build_report_html_for_all(conn: sqlite3.Connection) -> str:
-    pairs = _list_searched_pairs(conn)
+    pairs = list_searched_pairs(conn)
     groups = [
         render_group_html(
-            company_name, topic_name, get_new_since_last_search(conn, company_id, topic_id)
+            company_name,
+            topic_name,
+            get_new_since_last_search(conn, company_id, topic_id),
+            empty_message="Nada novo desde a última busca.",
         )
         for company_id, company_name, topic_id, topic_name in pairs
     ]

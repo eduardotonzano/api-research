@@ -101,6 +101,35 @@ def add_news(
         return row["id"]
 
 
+def lookup_company_id(conn: sqlite3.Connection, company_name: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM companies WHERE name = ? COLLATE NOCASE", (company_name,)
+    ).fetchone()
+    return row["id"] if row is not None else None
+
+
+def lookup_topic_id(conn: sqlite3.Connection, topic_name: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM topics WHERE name = ? COLLATE NOCASE", (topic_name,)
+    ).fetchone()
+    return row["id"] if row is not None else None
+
+
+def list_searched_pairs(conn: sqlite3.Connection) -> list[tuple[int, str, int, str]]:
+    """Todos os pares (empresa, tópico) que já tiveram pelo menos uma busca."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT c.id AS company_id, c.name AS company_name,
+               t.id AS topic_id, t.name AS topic_name
+        FROM searches s
+        JOIN companies c ON c.id = s.company_id
+        JOIN topics t ON t.id = s.topic_id
+        ORDER BY c.name, t.name
+        """
+    ).fetchall()
+    return [(r["company_id"], r["company_name"], r["topic_id"], r["topic_name"]) for r in rows]
+
+
 def get_existing_summary(
     conn: sqlite3.Connection, url: str, content_hash: str | None = None
 ) -> str | None:
@@ -194,6 +223,32 @@ def get_new_since_last_search(
         JOIN search_results sr ON sr.news_id = n.id
         WHERE sr.search_id = (SELECT id FROM latest)
           AND n.id NOT IN (SELECT news_id FROM previous_news_ids)
+        ORDER BY COALESCE(n.published_at, n.fetched_at) DESC
+        """,
+        (company_id, topic_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_latest_search_news(
+    conn: sqlite3.Connection, company_id: int, topic_id: int
+) -> list[dict[str, Any]]:
+    """Todas as notícias trazidas pela busca mais recente de empresa+tópico —
+    o 'retrato atual', não a diferença desde a busca anterior. Usado no
+    formulário e no relatório pós-busca, onde o usuário quer ver o que há de
+    relevante agora, não só o que mudou desde a última vez."""
+    rows = conn.execute(
+        """
+        WITH latest AS (
+            SELECT id FROM searches
+            WHERE company_id = ? AND topic_id = ?
+            ORDER BY searched_at DESC, id DESC
+            LIMIT 1
+        )
+        SELECT n.*
+        FROM news n
+        JOIN search_results sr ON sr.news_id = n.id
+        WHERE sr.search_id = (SELECT id FROM latest)
         ORDER BY COALESCE(n.published_at, n.fetched_at) DESC
         """,
         (company_id, topic_id),

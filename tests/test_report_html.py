@@ -22,10 +22,17 @@ def test_render_group_html_escapes_special_characters():
     assert "Empresa &amp; Cia" in html
 
 
-def test_render_group_html_shows_empty_state_when_no_items():
+def test_render_group_html_shows_default_empty_state_when_no_items():
     html = render_group_html("Vale", "resultados", [])
-    assert "Nada novo desde a última busca." in html
+    assert "Nenhuma notícia encontrada." in html
     assert "Vale" in html and "resultados" in html
+
+
+def test_render_group_html_accepts_custom_empty_message():
+    html = render_group_html(
+        "Vale", "resultados", [], empty_message="Nada novo desde a última busca."
+    )
+    assert "Nada novo desde a última busca." in html
 
 
 def test_render_group_html_omits_missing_optional_fields():

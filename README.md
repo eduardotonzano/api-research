@@ -190,12 +190,13 @@ tests/
 ```
 
 A query em si (`get_new_since_last_search`, `db/queries.py`) já existia desde
-a Fase 1 — Fase 4 só expõe ela de dois jeitos:
+a Fase 1. `whats_new.py` expõe ela sob demanda, sem gastar busca/cota — lê só
+o que já está salvo, sem tocar em rede/RSS/LLM, útil pra conferir de novo sem
+refazer a busca.
 
-1. **Automático**: `run_search.py` já mostra o que é novo ao final de cada busca
-   (compara a busca que acabou de rodar com as anteriores do mesmo par empresa+tópico).
-2. **Sob demanda, sem gastar busca/cota**: `whats_new.py` lê só o que já está
-   salvo, sem tocar em rede/RSS/LLM — útil pra conferir de novo sem refazer a busca.
+⚠️ **Ajuste pós-Fase 5**: o relatório que `run_search.py` mostra ao final de
+cada busca **não** usa mais essa query — ver "Retrato atual vs. diff" logo
+abaixo.
 
 ```bash
 python3 whats_new.py "Petrobras" "resultados"   # um par específico
@@ -228,7 +229,71 @@ suporte a modo escuro do sistema.
 - O terminal continua mostrando só um resumo curto (contagem + caminho do
   arquivo) — o detalhe completo fica no HTML.
 
-## Próximas fases (não iniciadas)
+## Correções depois do teste real (datas erradas + relatório confuso)
 
-Nenhuma — as 5 fases planejadas foram implementadas e testadas. Ajustes e
-refinamentos a partir daqui.
+Rodando de verdade, apareceram dois problemas que não tinham como ser pegos
+só com dados mockados:
+
+**1. Data de publicação errada.** Páginas sem meta tag de data limpa faziam o
+`trafilatura` (via `htmldate`) escanear todo texto solto da página como
+último recurso — barra lateral, "notícias relacionadas", rodapé — e pegar
+qualquer data ali como se fosse a de publicação. Corrigido em duas frentes:
+`fetch/extractor.py` agora chama `extract_metadata(..., extensive=False)`
+(mantém meta tags/JSON-LD limpos, corta a busca de último recurso), e
+`run_search.py` inverteu a prioridade — a data que já vem estruturada do RSS
+(Google News/portais/Yahoo) vale primeiro; a data "adivinhada" do HTML só
+entra quando o feed não trouxe nenhuma.
+
+**2. "Retrato atual" em vez de "diff".** O relatório que `run_search.py`
+mostrava ao final de cada busca usava `get_new_since_last_search` — ou seja,
+só o que mudou desde a última vez. Rodando a busca várias vezes seguidas (em
+teste), quase tudo já contava como "visto", sobrando pouca coisa útil. Trocado
+por `get_latest_search_news` (`db/queries.py`): mostra **tudo que a busca mais
+recente encontrou**, sempre o quadro atual, não a diferença. `whats_new.py`
+continua com a semântica de diff (é o que o nome promete).
+
+**3. Filtro de recência.** Nem toda notícia que bate a palavra-chave é atual
+— `date_utils.py` (`is_recent` / `filter_recent_items`) descarta do relatório
+o que tem data conhecida e claramente antiga (padrão: 45 dias, ajustável via
+`--max-age-days`). Notícia com data desconhecida/ilegível não é descartada
+(preferimos mostrar incerto a esconder algo relevante).
+
+## Formulário web local (Fase 6)
+
+```
+app.py              # Flask: formulário ticker/empresa + tópico -> busca -> relatório
+tests/
+  test_app.py
+```
+
+Em vez de digitar comando no terminal toda vez, um formulário local:
+
+```bash
+python3 app.py
+```
+
+Abre `http://localhost:5000` (no Codespaces, a porta é encaminhada
+automaticamente — aba "Ports"). Digita empresa, ticker (opcional) e tópico,
+aperta **Buscar** — roda a busca de verdade (mesmo `run_search.run_search`
+das fases anteriores, reaproveitado, não duplicado) e mostra o relatório na
+mesma página. Sob demanda: não roda sozinho em background, sempre traz o
+que há de mais atual no momento em que você pede.
+
+A página inicial também lista todos os pares empresa+tópico já buscados, com
+link direto pro "retrato atual" de cada um (sem precisar buscar de novo).
+
+## Visualizando o banco direto no VS Code
+
+Instala a extensão **"SQLite Viewer"** (gratuita) no VS Code/Codespace,
+clica com o botão direito em `data/newsmon.db` no explorador de arquivos, e
+abre uma visão de tabela (tipo planilha) com `companies`, `topics`,
+`searches`, `news` e `search_results` — sem precisar rodar script nenhum só
+pra olhar os dados.
+
+## Próximas fases
+
+Nenhuma fase planejada restante — a base (Fase 1), busca (Fase 2), resumo
+(Fase 3), comparação de histórico (Fase 4) e layout (Fase 5) foram
+implementadas, testadas, e ajustadas depois do teste real (datas +
+"retrato atual" + formulário web, acima). Próximos ajustes a partir daqui são
+sob demanda.

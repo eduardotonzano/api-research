@@ -11,7 +11,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-_STYLE = """<style>
+STYLE = """<style>
 :root { --bg:#f7f7f5; --card-bg:#ffffff; --text:#1a1a1a; --muted:#666666; --border:#e2e2e2; --accent:#2563eb; }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#15161a; --card-bg:#1f2024; --text:#e8e8e8; --muted:#9a9a9a; --border:#333333; --accent:#7aa2f7; }
@@ -55,10 +55,16 @@ def _render_card(item: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def render_group_html(company_name: str, topic_name: str, items: list[dict[str, Any]]) -> str:
+def render_group_html(
+    company_name: str,
+    topic_name: str,
+    items: list[dict[str, Any]],
+    *,
+    empty_message: str = "Nenhuma notícia encontrada.",
+) -> str:
     heading = f"{escape(company_name)} + {escape(topic_name)}"
     body = (
-        '<p class="empty">Nada novo desde a última busca.</p>'
+        f'<p class="empty">{escape(empty_message)}</p>'
         if not items
         else "\n".join(_render_card(item) for item in items)
     )
@@ -78,7 +84,7 @@ def render_report_page(groups_html: list[str], *, title: str = "Notícias novas"
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)}</title>
-{_STYLE}
+{STYLE}
 </head>
 <body>
 <h1>{escape(title)}</h1>

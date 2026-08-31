@@ -9,6 +9,7 @@ from db.queries import (
     add_news,
     create_search,
     get_company_history,
+    get_latest_search_news,
     get_new_since_last_search,
     get_or_create_company,
     get_or_create_topic,
@@ -157,6 +158,32 @@ def test_new_since_last_search_no_searches_returns_empty(conn):
     company_id = get_or_create_company(conn, "Weg", "WEGE3")
     topic_id = get_or_create_topic(conn, "governanca")
     assert get_new_since_last_search(conn, company_id, topic_id) == []
+
+
+def test_get_latest_search_news_returns_everything_from_most_recent_search(conn):
+    company_id = get_or_create_company(conn, "Ambev", "ABEV3")
+    topic_id = get_or_create_topic(conn, "resultados")
+
+    search1 = create_search(conn, company_id, topic_id, searched_at="2026-08-01T09:00:00Z")
+    old_news = add_news(conn, url="https://example.com/ambev-antiga", title="Notícia antiga")
+    link_search_news(conn, search1, old_news)
+
+    search2 = create_search(conn, company_id, topic_id, searched_at="2026-08-20T09:00:00Z")
+    new_news = add_news(conn, url="https://example.com/ambev-nova", title="Notícia nova")
+    link_search_news(conn, search2, old_news)  # a mesma notícia antiga reapareceu
+    link_search_news(conn, search2, new_news)
+
+    # diferente de get_new_since_last_search: aqui queremos TUDO da busca mais
+    # recente, mesmo notícias que já tinham aparecido antes.
+    items = get_latest_search_news(conn, company_id, topic_id)
+    titles = {item["title"] for item in items}
+    assert titles == {"Notícia antiga", "Notícia nova"}
+
+
+def test_get_latest_search_news_no_searches_returns_empty(conn):
+    company_id = get_or_create_company(conn, "Weg", "WEGE3")
+    topic_id = get_or_create_topic(conn, "governanca")
+    assert get_latest_search_news(conn, company_id, topic_id) == []
 
 
 # --- Dados malformados / propositalmente inválidos ---
