@@ -10,7 +10,12 @@ from db.queries import (
     get_or_create_topic,
     link_search_news,
 )
-from whats_new import get_new_for_all_pairs, get_new_for_pair
+from whats_new import (
+    build_report_html_for_all,
+    build_report_html_for_pair,
+    get_new_for_all_pairs,
+    get_new_for_pair,
+)
 
 
 @pytest.fixture
@@ -105,3 +110,64 @@ def test_get_new_for_all_pairs_covers_every_company_topic_pair(conn):
     assert "Petrobras lucro" in text
     assert "=== Vale + M&A ===" in text
     assert "Vale fusão" in text
+
+
+# --- Relatório HTML (Fase 5) ---
+
+
+def test_build_report_html_for_pair_when_company_never_searched(conn):
+    found, html = build_report_html_for_pair(conn, "Empresa Inexistente", "resultados")
+    assert found is False
+    assert "nunca foi buscada" in html
+    assert "<!doctype html>" in html.lower()
+
+
+def test_build_report_html_for_pair_when_topic_never_searched(conn):
+    get_or_create_company(conn, "Petrobras", "PETR4")
+    found, html = build_report_html_for_pair(conn, "Petrobras", "tópico-inexistente")
+    assert found is False
+    assert "nunca foi buscado" in html
+
+
+def test_build_report_html_for_pair_shows_new_items(conn):
+    company_id = get_or_create_company(conn, "Petrobras", "PETR4")
+    topic_id = get_or_create_topic(conn, "resultados")
+    search_id = create_search(conn, company_id, topic_id)
+    news_id = add_news(
+        conn,
+        url="https://example.com/petrobras-1",
+        title="Petrobras anuncia lucro recorde",
+        source="Valor",
+        summary="Resumo do trimestre.",
+    )
+    link_search_news(conn, search_id, news_id)
+
+    found, html = build_report_html_for_pair(conn, "Petrobras", "resultados")
+    assert found is True
+    assert "Petrobras anuncia lucro recorde" in html
+    assert 'href="https://example.com/petrobras-1"' in html
+    assert "Resumo do trimestre." in html
+
+
+def test_build_report_html_for_all_covers_every_pair(conn):
+    petrobras_id = get_or_create_company(conn, "Petrobras", "PETR4")
+    vale_id = get_or_create_company(conn, "Vale", "VALE3")
+    resultados_id = get_or_create_topic(conn, "resultados")
+    ma_id = get_or_create_topic(conn, "M&A")
+
+    search1 = create_search(conn, petrobras_id, resultados_id)
+    news1 = add_news(conn, url="https://example.com/petrobras-resultado", title="Petrobras lucro")
+    link_search_news(conn, search1, news1)
+
+    search2 = create_search(conn, vale_id, ma_id)
+    news2 = add_news(conn, url="https://example.com/vale-fusao", title="Vale fusão")
+    link_search_news(conn, search2, news2)
+
+    html = build_report_html_for_all(conn)
+    assert "Petrobras lucro" in html
+    assert "Vale fusão" in html
+
+
+def test_build_report_html_for_all_with_no_searches_yet(conn):
+    html = build_report_html_for_all(conn)
+    assert "Nenhuma busca feita ainda." in html

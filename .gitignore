@@ -5,6 +5,9 @@ data/*.db-wal
 data/*.db-shm
 *.db
 
+# Relatórios HTML gerados (saída, não fonte)
+reports/
+
 # Segredos / configuração local
 .env
 .env.*

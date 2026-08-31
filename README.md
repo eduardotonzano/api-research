@@ -205,9 +205,30 @@ python3 whats_new.py --all                       # todos os pares já buscados
 Diferente das Fases 2 e 3, essa é só lógica de banco — dá pra rodar e validar
 de ponta a ponta mesmo sem acesso à rede externa.
 
+## Layout de saída (Fase 5)
+
+```
+report_html.py       # gera o HTML (cards por empresa+tópico, CSS embutido)
+reports/                # saída gerada (gitignored) — não é fonte, é resultado
+tests/
+  test_report_html.py
+```
+
+Formato escolhido: **relatório HTML**, não terminal — melhor pra folhear várias
+notícias de uma vez e guardar/compartilhar depois. Sem framework/JS: HTML+CSS
+puro, auto-contido, abre em qualquer navegador direto do arquivo local, com
+suporte a modo escuro do sistema.
+
+- `run_search.py` grava `reports/latest_search.html` ao final de cada busca
+  (só o par empresa+tópico que acabou de rodar).
+- `whats_new.py` grava `reports/whats_new.html` (um par específico ou `--all`).
+- Ambos aceitam `--open` pra abrir o relatório no navegador automaticamente.
+- Título, fonte e resumo vêm de fora (scraping) — tudo passa por `html.escape`
+  antes de virar HTML, pra nenhum site injetar marcação quebrada.
+- O terminal continua mostrando só um resumo curto (contagem + caminho do
+  arquivo) — o detalhe completo fica no HTML.
+
 ## Próximas fases (não iniciadas)
 
-5. Layout de saída (terminal ou HTML).
-
-Cada fase só começa após aprovação explícita e com os testes da fase anterior
-passando.
+Nenhuma — as 5 fases planejadas foram implementadas e testadas. Ajustes e
+refinamentos a partir daqui.

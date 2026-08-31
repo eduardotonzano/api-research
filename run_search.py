@@ -10,6 +10,8 @@ import argparse
 import sqlite3
 import sys
 import time
+import webbrowser
+from pathlib import Path
 
 from db.connection import init_db
 from db.queries import (
@@ -26,8 +28,10 @@ from fetch.google_news import fetch_google_news
 from fetch.hashing import compute_content_hash
 from fetch.portal_feeds import search_portal_feeds
 from fetch.yahoo_finance import search_yahoo_finance
-from reporting import format_new_items
+from report_html import render_group_html, render_report_page, write_report
 from summarize import summarize_article
+
+DEFAULT_REPORT_PATH = Path(__file__).resolve().parent / "reports" / "latest_search.html"
 
 # Delay entre extrações de artigo (não entre a busca do RSS em si), pra não
 # martelar os sites de origem com requisições em sequência.
@@ -144,6 +148,9 @@ def main() -> None:
         default=".SA",
         help="Sufixo de bolsa pro Yahoo Finance (padrão .SA, da B3; use vazio pra tickers dos EUA)",
     )
+    parser.add_argument(
+        "--open", action="store_true", help="Abre o relatório no navegador ao final"
+    )
     args = parser.parse_args()
 
     conn = init_db()
@@ -163,8 +170,18 @@ def main() -> None:
         )
 
         new_items = get_new_since_last_search(conn, stats["company_id"], stats["topic_id"])
-        print()
-        print(format_new_items(args.company, args.topic, new_items))
+        group_html = render_group_html(args.company, args.topic, new_items)
+        page_html = render_report_page(
+            [group_html], title=f"Novidades: {args.company} + {args.topic}"
+        )
+        report_path = write_report(DEFAULT_REPORT_PATH, page_html)
+        print(f"Relatório: {report_path}")
+
+        if args.open:
+            try:
+                webbrowser.open(report_path.resolve().as_uri())
+            except Exception as exc:
+                print(f"Aviso: não consegui abrir o navegador automaticamente: {exc}", file=sys.stderr)
     finally:
         conn.close()
 
