@@ -96,7 +96,11 @@ def run_search(
 
         if result is not None:
             final_url = result.final_url
-            final_published_at = result.published_at or item.published_at
+            # A data do feed (RSS) é estruturada e vem da própria fonte — mais
+            # confiável que a data "adivinhada" a partir do HTML da página pelo
+            # trafilatura. Só usamos a data extraída do HTML quando o feed não
+            # trouxe nenhuma.
+            final_published_at = item.published_at or result.published_at
             content_hash = compute_content_hash(item.title, result.text)
             if result.text is None:
                 failed_extractions += 1

@@ -54,7 +54,12 @@ def extract_article(url: str, *, session: requests.Session | None = None) -> Ext
         return ExtractionResult(final_url=final_url, text=None, published_at=None)
 
     text = trafilatura.extract(downloaded)
-    metadata = trafilatura.extract_metadata(downloaded, default_url=final_url)
+    # extensive=False: evita a busca "de último recurso" do htmldate, que escaneia
+    # todo o texto solto da página (barra lateral, rodapé, "notícias relacionadas")
+    # e pode pegar uma data qualquer que não é a de publicação da matéria. Sem
+    # isso, páginas sem meta tag de data limpa retornavam datas erradas (ex: a
+    # data de uma notícia relacionada ao lado, não da matéria em si).
+    metadata = trafilatura.extract_metadata(downloaded, default_url=final_url, extensive=False)
     published_at = metadata.date if metadata else None
 
     return ExtractionResult(final_url=final_url, text=text, published_at=published_at)

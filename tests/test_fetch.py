@@ -89,6 +89,21 @@ segundo trimestre, superando as expectativas do mercado.</p>
 </body></html>
 """
 
+# Sem meta tag de data limpa, mas com uma data solta numa barra lateral —
+# reproduz o bug real de datas erradas (busca "extensiva" do trafilatura
+# pegando qualquer data solta na página como se fosse a da matéria).
+SAMPLE_ARTICLE_HTML_NOISY_SIDEBAR_DATE = """
+<html><head><title>Vale negocia fusão com mineradora</title></head><body>
+<aside>Últimas notícias - 27/08/2026</aside>
+<article>
+<h1>Vale negocia fusão com mineradora</h1>
+<p>A Vale está em conversas avançadas com uma mineradora australiana sobre uma
+possível fusão de ativos, segundo fontes próximas ao negócio ouvidas há
+duas semanas.</p>
+</article>
+</body></html>
+"""
+
 
 class FakeResponse:
     def __init__(self, text: str = "", status_code: int = 200, url: str = ""):
@@ -262,6 +277,21 @@ def test_extract_article_returns_text_and_date(monkeypatch):
     assert result.published_at == "2026-08-20"
 
 
+def test_extract_article_does_not_pick_up_unrelated_date_from_page_furniture(monkeypatch):
+    """Reproduz o bug real: página sem meta tag de data, mas com uma data solta
+    numa barra lateral (comum em sites de notícia) não deve virar published_at
+    da matéria — antes da correção (extensive=True), o trafilatura pegava essa
+    data solta como se fosse a de publicação."""
+    monkeypatch.setattr(
+        "fetch.extractor.resolve_final_url", lambda url, **kw: "https://portal.com/vale-fusao"
+    )
+    monkeypatch.setattr("trafilatura.fetch_url", lambda url: SAMPLE_ARTICLE_HTML_NOISY_SIDEBAR_DATE)
+
+    result = extract_article("https://news.google.com/rss/articles/xyz")
+    assert result.published_at is None
+    assert "Vale" in result.text
+
+
 def test_extract_article_handles_download_failure_gracefully(monkeypatch):
     monkeypatch.setattr(
         "fetch.extractor.resolve_final_url", lambda url, **kw: "https://bloqueado.com/artigo"
@@ -389,6 +419,49 @@ def test_run_search_skips_yahoo_finance_without_ticker(tmp_path: Path, monkeypat
     stats = run_search.run_search(conn, "Petrobras", "resultados", ticker=None, delay_seconds=0)
 
     assert stats["found"] == 0
+    conn.close()
+
+
+def test_run_search_prefers_rss_date_over_extracted_date(tmp_path: Path, monkeypatch):
+    """A data do RSS (feed) é estruturada e confiável; a data 'adivinhada' a
+    partir do HTML pelo trafilatura só deve valer quando o RSS não trouxe
+    nenhuma. Antes da correção, a ordem estava invertida e uma data errada
+    extraída da página sobrescrevia a data correta do feed."""
+    db_path = tmp_path / "pipeline_date_precedence.db"
+    conn = init_db(db_path)
+
+    rss_items = [
+        RssItem(
+            title="Vale negocia fusão com mineradora",
+            link="https://news.google.com/rss/articles/vale",
+            published_at="Thu, 13 Aug 2026 09:00:00 GMT",  # data correta, do feed
+            source="Valor Econômico",
+        ),
+    ]
+
+    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: rss_items)
+    monkeypatch.setattr(
+        run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(
+        run_search, "search_yahoo_finance", lambda ticker, topic, market_suffix=".SA": []
+    )
+    monkeypatch.setattr(
+        run_search,
+        "extract_article",
+        lambda url: ExtractionResult(
+            final_url=url,
+            text="Texto da matéria sobre a fusão.",
+            published_at="2026-08-27",  # data errada, "adivinhada" da página
+        ),
+    )
+    monkeypatch.setattr(run_search, "summarize_article", lambda title, text: None)
+
+    run_search.run_search(conn, "Vale", "M&A", ticker="VALE3", delay_seconds=0)
+
+    row = conn.execute("SELECT published_at FROM news").fetchone()
+    assert row["published_at"] == "Thu, 13 Aug 2026 09:00:00 GMT"
+
     conn.close()
 
 
