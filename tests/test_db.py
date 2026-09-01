@@ -186,6 +186,67 @@ def test_get_latest_search_news_no_searches_returns_empty(conn):
     assert get_latest_search_news(conn, company_id, topic_id) == []
 
 
+def test_get_latest_search_news_orders_by_relevance_before_recency(conn):
+    company_id = get_or_create_company(conn, "Ambev", "ABEV3")
+    topic_id = get_or_create_topic(conn, "resultados")
+    search_id = create_search(conn, company_id, topic_id)
+
+    # a notícia mais recente tem relevância baixa; a mais antiga tem relevância
+    # alta — o resultado deve vir ordenado pela relevância, não pela data.
+    older_relevant = add_news(
+        conn,
+        url="https://example.com/relevante",
+        title="Relevante",
+        published_at="2026-08-01",
+    )
+    newer_less_relevant = add_news(
+        conn,
+        url="https://example.com/pouco-relevante",
+        title="Pouco relevante",
+        published_at="2026-08-20",
+    )
+    link_search_news(conn, search_id, older_relevant, relevance=0.9)
+    link_search_news(conn, search_id, newer_less_relevant, relevance=0.3)
+
+    items = get_latest_search_news(conn, company_id, topic_id)
+    assert [item["title"] for item in items] == ["Relevante", "Pouco relevante"]
+
+
+def test_get_latest_search_news_null_relevance_sorts_after_scored_rows(conn):
+    company_id = get_or_create_company(conn, "Ambev", "ABEV3")
+    topic_id = get_or_create_topic(conn, "resultados")
+    search_id = create_search(conn, company_id, topic_id)
+
+    scored = add_news(conn, url="https://example.com/pontuada", title="Pontuada")
+    unscored = add_news(conn, url="https://example.com/sem-pontuacao", title="Sem pontuação")
+    link_search_news(conn, search_id, scored, relevance=0.8)
+    link_search_news(conn, search_id, unscored)  # relevance=None (comportamento padrão)
+
+    items = get_latest_search_news(conn, company_id, topic_id)
+    assert [item["title"] for item in items] == ["Pontuada", "Sem pontuação"]
+
+
+def test_get_new_since_last_search_orders_by_relevance_before_recency(conn):
+    company_id = get_or_create_company(conn, "Ambev", "ABEV3")
+    topic_id = get_or_create_topic(conn, "resultados")
+    search_id = create_search(conn, company_id, topic_id)
+
+    older_relevant = add_news(
+        conn, url="https://example.com/relevante-2", title="Relevante", published_at="2026-08-01"
+    )
+    newer_less_relevant = add_news(
+        conn,
+        url="https://example.com/pouco-relevante-2",
+        title="Pouco relevante",
+        published_at="2026-08-20",
+    )
+    link_search_news(conn, search_id, older_relevant, relevance=0.9)
+    link_search_news(conn, search_id, newer_less_relevant, relevance=0.3)
+
+    items = get_new_since_last_search(conn, company_id, topic_id)
+    assert [item["title"] for item in items] == ["Relevante", "Pouco relevante"]
+
+
 # --- Dados malformados / propositalmente inválidos ---
 
 

@@ -70,9 +70,29 @@ def fetch_portal_feed(
     return _parse_feed(response.text, source_name)
 
 
-def matches_keywords(item: FeedItem, keywords: list[str | None]) -> bool:
+def matches_keywords(
+    item: FeedItem,
+    *,
+    company: str | None,
+    ticker: str | None = None,
+    topic: str | None = None,
+) -> bool:
+    """Um item só é relevante se citar a empresa (nome OU ticker) no título —
+    isso é obrigatório, nunca opcional. Quando um tópico foi informado, o
+    título também precisa citar o tópico. Antes disso era 'basta bater
+    qualquer uma das três palavras', o que deixava passar notícia que só
+    menciona o tópico (ex: 'resultados') sem falar da empresa nenhuma — puro
+    ruído."""
     haystack = item.title.lower()
-    return any(keyword.lower() in haystack for keyword in keywords if keyword)
+
+    identity_terms = [term for term in (company, ticker) if term]
+    if not identity_terms or not any(term.lower() in haystack for term in identity_terms):
+        return False
+
+    topic_clean = (topic or "").strip()
+    if not topic_clean:
+        return True
+    return topic_clean.lower() in haystack
 
 
 def search_portal_feeds(
@@ -83,15 +103,19 @@ def search_portal_feeds(
     feeds: dict[str, str] | None = None,
     session: requests.Session | None = None,
 ) -> list[FeedItem]:
-    """Varre os feeds fixos de portais, filtrando por empresa/ticker/tópico no
-    título. Falha em um feed não derruba a busca nos demais."""
+    """Varre os feeds fixos de portais, filtrando por empresa/ticker no
+    título (obrigatório) e por tópico (se informado). Falha em um feed não
+    derruba a busca nos demais."""
     feeds = feeds if feeds is not None else PORTAL_FEEDS
-    keywords = [company, ticker, topic]
     matched: list[FeedItem] = []
     for source_name, feed_url in feeds.items():
         try:
             items = fetch_portal_feed(source_name, feed_url, session=session)
         except requests.RequestException:
             continue
-        matched.extend(item for item in items if matches_keywords(item, keywords))
+        matched.extend(
+            item
+            for item in items
+            if matches_keywords(item, company=company, ticker=ticker, topic=topic)
+        )
     return matched

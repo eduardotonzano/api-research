@@ -14,7 +14,7 @@ import webbrowser
 from pathlib import Path
 
 from db.connection import init_db
-from date_utils import filter_recent_items
+from date_utils import filter_recent_items, is_recent
 from db.queries import (
     add_news,
     create_search,
@@ -25,10 +25,11 @@ from db.queries import (
     link_search_news,
 )
 from fetch.extractor import extract_article
-from fetch.google_news import fetch_google_news
+from fetch.google_news import fetch_google_news_multi_locale
 from fetch.hashing import compute_content_hash
 from fetch.portal_feeds import search_portal_feeds
 from fetch.yahoo_finance import search_yahoo_finance
+from relevance import compute_relevance
 from report_html import render_group_html, render_report_page, write_report
 from summarize import summarize_article
 
@@ -52,13 +53,14 @@ def run_search(
     *,
     yahoo_market_suffix: str = ".SA",
     delay_seconds: float = DELAY_BETWEEN_EXTRACTIONS_SECONDS,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
 ) -> dict:
     company_id = get_or_create_company(conn, company, ticker)
     topic_id = get_or_create_topic(conn, topic)
     search_id = create_search(conn, company_id, topic_id, source="google_news+portais+yahoo")
 
     try:
-        rss_items = fetch_google_news(company, topic)
+        rss_items = fetch_google_news_multi_locale(company, topic)
     except Exception as exc:
         print(f"Aviso: falha ao buscar Google News RSS: {exc}", file=sys.stderr)
         rss_items = []
@@ -90,9 +92,34 @@ def run_search(
     saved = 0
     failed_extractions = 0
     summarized = 0
+    skipped_stale = 0
 
     for index, item in enumerate(all_items, start=1):
         print(f"[{index}/{total_items}] {item.title}")
+
+        # Notícia claramente velha (data do feed já fora da janela de
+        # relevância) não vale a pena extrair/resumir — economiza tempo e
+        # cota de LLM. Sem data conhecida, is_recent trata como recente (não
+        # descarta por incerteza).
+        if not is_recent(item.published_at, max_age_days=max_age_days):
+            print(f"  descartada por idade (> {max_age_days} dias) — sem extração/resumo")
+            relevance = compute_relevance(
+                item.title, company, topic, ticker=ticker, published_at=item.published_at
+            )
+            news_id = add_news(
+                conn,
+                url=item.link,
+                title=item.title,
+                source=item.source,
+                published_at=item.published_at,
+            )
+            link_search_news(conn, search_id, news_id, relevance=relevance)
+            saved += 1
+            skipped_stale += 1
+            if delay_seconds:
+                time.sleep(delay_seconds)
+            continue
+
         try:
             result = extract_article(item.link)
         except Exception:
@@ -125,6 +152,9 @@ def run_search(
         else:
             failed_extractions += 1
 
+        relevance = compute_relevance(
+            item.title, company, topic, ticker=ticker, published_at=final_published_at
+        )
         news_id = add_news(
             conn,
             url=final_url,
@@ -134,7 +164,7 @@ def run_search(
             published_at=final_published_at,
             summary=summary,
         )
-        link_search_news(conn, search_id, news_id)
+        link_search_news(conn, search_id, news_id, relevance=relevance)
         saved += 1
 
         if delay_seconds:
@@ -148,6 +178,7 @@ def run_search(
         "saved": saved,
         "failed_extractions": failed_extractions,
         "summarized": summarized,
+        "skipped_stale": skipped_stale,
     }
 
 
@@ -180,12 +211,14 @@ def main() -> None:
             args.topic,
             ticker=args.ticker,
             yahoo_market_suffix=args.yahoo_market_suffix,
+            max_age_days=args.max_age_days,
         )
 
         print(
             f"Busca concluída: {stats['found']} notícias encontradas, {stats['saved']} salvas "
             f"({stats['failed_extractions']} sem extração completa de texto, "
-            f"{stats['summarized']} resumidas)."
+            f"{stats['summarized']} resumidas, "
+            f"{stats['skipped_stale']} descartadas por idade sem gastar cota de resumo)."
         )
 
         current_items = get_latest_search_news(conn, stats["company_id"], stats["topic_id"])

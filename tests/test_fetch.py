@@ -6,7 +6,14 @@ import requests
 import run_search
 from db.connection import init_db
 from fetch.extractor import ExtractionResult, extract_article, resolve_final_url
-from fetch.google_news import RssItem, _clean_title, _parse_rss, build_query, fetch_google_news
+from fetch.google_news import (
+    RssItem,
+    _clean_title,
+    _parse_rss,
+    build_query,
+    fetch_google_news,
+    fetch_google_news_multi_locale,
+)
 from fetch.hashing import compute_content_hash
 from fetch.portal_feeds import FeedItem, matches_keywords, search_portal_feeds
 from fetch.yahoo_finance import (
@@ -35,6 +42,26 @@ SAMPLE_GOOGLE_NEWS_RSS = """<?xml version="1.0" encoding="UTF-8"?>
     <item>
       <title>Item sem link, deve ser ignorado</title>
       <pubDate>Thu, 20 Aug 2026 13:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+SAMPLE_GOOGLE_NEWS_RSS_EN = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>"petrobras results" - Google News</title>
+    <item>
+      <title>Petrobras posts record profit for the quarter - Bloomberg</title>
+      <link>https://news.google.com/rss/articles/CBMiEN000aaa?oc=5</link>
+      <pubDate>Thu, 20 Aug 2026 10:00:00 GMT</pubDate>
+      <source url="https://bloomberg.com">Bloomberg</source>
+    </item>
+    <item>
+      <title>Petrobras shares jump after earnings beat - Reuters</title>
+      <link>https://news.google.com/rss/articles/CBMiEN111bbb?oc=5</link>
+      <pubDate>Thu, 20 Aug 2026 11:00:00 GMT</pubDate>
+      <source url="https://reuters.com">Reuters</source>
     </item>
   </channel>
 </rss>
@@ -123,13 +150,20 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, response: FakeResponse | Exception):
-        self._response = response
+    """Aceita uma resposta/exceção única (repetida em toda chamada) ou uma
+    lista (uma por chamada, em ordem) — útil pra testar múltiplas requisições
+    sequenciais, como as duas regiões do Google News multi-locale."""
+
+    def __init__(self, response: FakeResponse | Exception | list):
+        self._responses = response if isinstance(response, list) else [response]
+        self.calls = 0
 
     def get(self, *args, **kwargs):
-        if isinstance(self._response, Exception):
-            raise self._response
-        return self._response
+        response = self._responses[min(self.calls, len(self._responses) - 1)]
+        self.calls += 1
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 # --- Google News RSS ---
@@ -166,6 +200,50 @@ def test_fetch_google_news_propagates_request_errors():
         fetch_google_news("Petrobras", "resultados", session=session)
 
 
+def test_fetch_google_news_accepts_custom_locale():
+    session = FakeSession(FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS_EN))
+    items = fetch_google_news(
+        "Petrobras", "results", hl="en-US", gl="US", ceid="US:en", session=session
+    )
+    assert len(items) == 2
+    assert items[0].source == "Bloomberg"
+
+
+def test_fetch_google_news_multi_locale_merges_two_regions():
+    session = FakeSession([
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS),
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS_EN),
+    ])
+    items = fetch_google_news_multi_locale("Petrobras", "resultados", session=session)
+    sources = {item.source for item in items}
+    assert sources == {"Valor Econômico", "InfoMoney", "Bloomberg", "Reuters"}
+    assert session.calls == 2
+
+
+def test_fetch_google_news_multi_locale_dedupes_same_title_across_locales():
+    duplicate_en = SAMPLE_GOOGLE_NEWS_RSS_EN.replace(
+        "Petrobras posts record profit for the quarter - Bloomberg",
+        "Petrobras anuncia lucro recorde no trimestre",
+    ).replace("CBMiEN000aaa", "CBMiEN999zzz")
+    session = FakeSession([
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS),
+        FakeResponse(text=duplicate_en),
+    ])
+    items = fetch_google_news_multi_locale("Petrobras", "resultados", session=session)
+    titles = [item.title.lower() for item in items]
+    assert titles.count("petrobras anuncia lucro recorde no trimestre") == 1
+
+
+def test_fetch_google_news_multi_locale_continues_when_one_locale_fails():
+    session = FakeSession([
+        requests.ConnectionError("pt-BR fora do ar"),
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS_EN),
+    ])
+    items = fetch_google_news_multi_locale("Petrobras", "resultados", session=session)
+    assert len(items) == 2
+    assert {item.source for item in items} == {"Bloomberg", "Reuters"}
+
+
 # --- Feeds de portais ---
 
 
@@ -195,8 +273,47 @@ def test_search_portal_feeds_skips_feed_on_error():
 
 def test_matches_keywords_is_case_insensitive():
     item = FeedItem(title="AÇÃO da PETROBRAS sobe", link="x", published_at=None, source="X")
-    assert matches_keywords(item, ["petrobras"])
-    assert not matches_keywords(item, ["vale"])
+    assert matches_keywords(item, company="petrobras")
+    assert not matches_keywords(item, company="vale")
+
+
+def test_matches_keywords_requires_company_even_when_topic_matches():
+    """Regressão do bug reportado: título que só bate no tópico, sem citar a
+    empresa, não pode passar mais."""
+    item = FeedItem(
+        title="Selic: o que esperar da próxima reunião do Copom",
+        link="x",
+        published_at=None,
+        source="X",
+    )
+    assert not matches_keywords(item, company="Petrobras", topic="resultados")
+
+
+def test_matches_keywords_company_alone_is_enough_without_topic():
+    item = FeedItem(title="Petrobras anuncia novo diretor", link="x", published_at=None, source="X")
+    assert matches_keywords(item, company="Petrobras", topic="")
+
+
+def test_matches_keywords_requires_topic_too_when_topic_given():
+    item = FeedItem(title="Petrobras anuncia novo diretor", link="x", published_at=None, source="X")
+    assert not matches_keywords(item, company="Petrobras", topic="dividendos")
+    assert matches_keywords(item, company="Petrobras", topic="diretor")
+
+
+def test_matches_keywords_ticker_alone_counts_as_identity():
+    item = FeedItem(title="PETR4 dispara na bolsa", link="x", published_at=None, source="X")
+    assert matches_keywords(item, company="Petrobras", ticker="PETR4", topic="")
+
+
+def test_search_portal_feeds_excludes_topic_only_matches():
+    session = FakeSession(FakeResponse(text=SAMPLE_PORTAL_RSS))
+    items = search_portal_feeds(
+        "Petrobras",
+        "Copom",  # bate no segundo item da amostra, que não cita a empresa
+        feeds={"InfoMoney": "https://www.infomoney.com.br/feed/"},
+        session=session,
+    )
+    assert items == []
 
 
 # --- Yahoo Finance ---
@@ -329,7 +446,7 @@ def test_run_search_pipeline_saves_and_dedupes(tmp_path: Path, monkeypatch):
         ),
     ]
 
-    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: rss_items)
+    monkeypatch.setattr(run_search, "fetch_google_news_multi_locale", lambda company, topic: rss_items)
     monkeypatch.setattr(
         run_search, "search_portal_feeds", lambda company, topic, ticker=None: portal_items
     )
@@ -377,7 +494,7 @@ def test_run_search_includes_yahoo_finance_when_ticker_given(tmp_path: Path, mon
         ),
     ]
 
-    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: [])
+    monkeypatch.setattr(run_search, "fetch_google_news_multi_locale", lambda company, topic: [])
     monkeypatch.setattr(
         run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
     )
@@ -410,7 +527,7 @@ def test_run_search_skips_yahoo_finance_without_ticker(tmp_path: Path, monkeypat
     def fail_if_called(*args, **kwargs):
         raise AssertionError("search_yahoo_finance não deveria ser chamado sem ticker")
 
-    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: [])
+    monkeypatch.setattr(run_search, "fetch_google_news_multi_locale", lambda company, topic: [])
     monkeypatch.setattr(
         run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
     )
@@ -439,7 +556,7 @@ def test_run_search_prefers_rss_date_over_extracted_date(tmp_path: Path, monkeyp
         ),
     ]
 
-    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: rss_items)
+    monkeypatch.setattr(run_search, "fetch_google_news_multi_locale", lambda company, topic: rss_items)
     monkeypatch.setattr(
         run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
     )
@@ -478,7 +595,7 @@ def test_run_search_saves_summary_when_available(tmp_path: Path, monkeypatch):
         ),
     ]
 
-    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: rss_items)
+    monkeypatch.setattr(run_search, "fetch_google_news_multi_locale", lambda company, topic: rss_items)
     monkeypatch.setattr(
         run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
     )
@@ -527,7 +644,7 @@ def test_run_search_reuses_existing_summary_instead_of_calling_llm_again(
     # primeira busca: notícia nova, chama o LLM
     monkeypatch.setattr(
         run_search,
-        "fetch_google_news",
+        "fetch_google_news_multi_locale",
         lambda company, topic: [
             RssItem(
                 title="Petrobras anuncia lucro recorde",
@@ -553,7 +670,7 @@ def test_run_search_reuses_existing_summary_instead_of_calling_llm_again(
     # chamar o LLM de novo, só reaproveitar o resumo já salvo
     monkeypatch.setattr(
         run_search,
-        "fetch_google_news",
+        "fetch_google_news_multi_locale",
         lambda company, topic: [
             RssItem(
                 title="Petrobras anuncia lucro recorde",
@@ -587,7 +704,7 @@ def test_run_search_continues_when_extraction_fails(tmp_path: Path, monkeypatch)
         ),
     ]
 
-    monkeypatch.setattr(run_search, "fetch_google_news", lambda company, topic: rss_items)
+    monkeypatch.setattr(run_search, "fetch_google_news_multi_locale", lambda company, topic: rss_items)
     monkeypatch.setattr(
         run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
     )
@@ -612,6 +729,93 @@ def test_run_search_continues_when_extraction_fails(tmp_path: Path, monkeypatch)
     row = conn.execute("SELECT title, content_hash FROM news").fetchone()
     assert row["title"] == "Notícia bloqueada por paywall"
     assert row["content_hash"] is None  # extração falhou, mas a notícia foi salva mesmo assim
+
+    conn.close()
+
+
+def test_run_search_skips_extraction_and_summarization_for_stale_items(
+    tmp_path: Path, monkeypatch
+):
+    db_path = tmp_path / "pipeline_stale.db"
+    conn = init_db(db_path)
+
+    stale_item = RssItem(
+        title="Petrobras: notícia de dois anos atrás",
+        link="https://news.google.com/rss/articles/velha",
+        published_at="Mon, 01 Jan 2024 10:00:00 GMT",
+        source="Valor Econômico",
+    )
+
+    monkeypatch.setattr(
+        run_search, "fetch_google_news_multi_locale", lambda company, topic: [stale_item]
+    )
+    monkeypatch.setattr(
+        run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(
+        run_search, "search_yahoo_finance", lambda ticker, topic, market_suffix=".SA": []
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("não deveria extrair/resumir notícia claramente velha")
+
+    monkeypatch.setattr(run_search, "extract_article", fail_if_called)
+    monkeypatch.setattr(run_search, "summarize_article", fail_if_called)
+
+    stats = run_search.run_search(
+        conn, "Petrobras", "resultados", ticker="PETR4", delay_seconds=0, max_age_days=45
+    )
+
+    assert stats["saved"] == 1
+    assert stats["skipped_stale"] == 1
+    assert stats["summarized"] == 0
+
+    row = conn.execute("SELECT title, content_hash, summary FROM news").fetchone()
+    assert row["title"] == "Petrobras: notícia de dois anos atrás"
+    assert row["content_hash"] is None
+    assert row["summary"] is None
+
+    conn.close()
+
+
+def test_run_search_still_processes_items_with_unknown_publish_date(tmp_path: Path, monkeypatch):
+    """is_recent trata data desconhecida como 'recente' — o corte por idade
+    não pode acabar descartando notícia só porque a fonte não informou data."""
+    db_path = tmp_path / "pipeline_unknown_date.db"
+    conn = init_db(db_path)
+
+    item_without_date = RssItem(
+        title="Petrobras anuncia parceria",
+        link="https://news.google.com/rss/articles/sem-data",
+        published_at=None,
+        source="InfoMoney",
+    )
+
+    monkeypatch.setattr(
+        run_search, "fetch_google_news_multi_locale", lambda company, topic: [item_without_date]
+    )
+    monkeypatch.setattr(
+        run_search, "search_portal_feeds", lambda company, topic, ticker=None: []
+    )
+    monkeypatch.setattr(
+        run_search, "search_yahoo_finance", lambda ticker, topic, market_suffix=".SA": []
+    )
+    monkeypatch.setattr(
+        run_search,
+        "extract_article",
+        lambda url: ExtractionResult(final_url=url, text="Texto da parceria.", published_at=None),
+    )
+    monkeypatch.setattr(run_search, "summarize_article", lambda title, text: "Resumo da parceria.")
+
+    stats = run_search.run_search(
+        conn, "Petrobras", "resultados", ticker="PETR4", delay_seconds=0
+    )
+
+    assert stats["skipped_stale"] == 0
+    assert stats["summarized"] == 1
+
+    row = conn.execute("SELECT summary FROM news").fetchone()
+    assert row["summary"] == "Resumo da parceria."
 
     conn.close()
 

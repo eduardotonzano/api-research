@@ -290,10 +290,53 @@ abre uma visão de tabela (tipo planilha) com `companies`, `topics`,
 `searches`, `news` e `search_results` — sem precisar rodar script nenhum só
 pra olhar os dados.
 
+## Cobertura internacional + qualidade do filtro
+
+Depois de mais um teste real, dois problemas novos: "não tem mídia
+internacional (Bloomberg, Investing.com etc)" e "o filtro ainda está muito
+ruim" (notícia sem nenhuma relação com a empresa aparecendo no relatório).
+
+**Cobertura internacional — `fetch/google_news.py`**
+- ⚠️ **Bloomberg não tem API pública nem RSS gratuito pra busca por
+  empresa** — não existe caminho gratuito pra puxar Bloomberg diretamente,
+  isso não é algo que dá pra resolver sem pagar.
+- O proxy gratuito mais confiável: `fetch_google_news_multi_locale` agora
+  consulta o Google News **duas vezes** — uma em pt-BR (como sempre foi) e
+  outra em en-US — e junta o resultado, deduplicado por link e por título
+  normalizado. A busca em inglês é o que traz Bloomberg/Reuters/MarketWatch/
+  WSJ *quando o Google já indexou* essas fontes pra empresa buscada. Uma
+  região fora do ar não derruba a outra.
+
+**Filtro AND (empresa E tópico) — `fetch/portal_feeds.py`**
+- Antes: `matches_keywords` aceitava um item se ele batesse **ou** na
+  empresa, **ou** no ticker, **ou** no tópico — uma notícia só sobre o
+  tópico (ex: "resultados"), sem citar a empresa, passava. Era a causa
+  principal do "filtro muito ruim".
+- Agora: citar a empresa (nome ou ticker) no título é **obrigatório**;
+  citar o tópico também é obrigatório quando um tópico foi informado.
+
+**Relevância deixou de ser sempre `NULL` — `relevance.py` (novo) + `run_search.py` + `db/queries.py`**
+- A coluna `search_results.relevance` existia desde a Fase 1 mas nunca era
+  preenchida. `compute_relevance` calcula uma pontuação simples e explicável
+  (citar empresa/ticker no título pesa mais que citar o tópico, que pesa mais
+  que só ter uma data conhecida) — nunca é usada pra descartar notícia, só
+  pra ordenar.
+- `get_latest_search_news` e `get_new_since_last_search` (`db/queries.py`)
+  agora ordenam por relevância primeiro, depois por data — antes era só
+  cronológico.
+
+**Não gastar resumo (LLM) com notícia já velha — `run_search.py`**
+- O filtro de idade (`is_recent`/`--max-age-days`) agora também roda **antes**
+  da extração/resumo, não só na hora de montar o relatório — uma notícia
+  claramente velha é salva com os metadados do RSS, mas não gasta tempo nem
+  cota de Groq/Gemini sendo resumida à toa. O filtro no relatório continua
+  existindo (cobre o caso de ver uma notícia salva há semanas).
+- Stats novo: `skipped_stale`, mostrado na mensagem final do terminal.
+
 ## Próximas fases
 
 Nenhuma fase planejada restante — a base (Fase 1), busca (Fase 2), resumo
 (Fase 3), comparação de histórico (Fase 4) e layout (Fase 5) foram
-implementadas, testadas, e ajustadas depois do teste real (datas +
-"retrato atual" + formulário web, acima). Próximos ajustes a partir daqui são
-sob demanda.
+implementadas, testadas, e ajustadas depois de dois testes reais (datas +
+"retrato atual" + formulário web; cobertura internacional + filtro +
+relevância, acima). Próximos ajustes a partir daqui são sob demanda.

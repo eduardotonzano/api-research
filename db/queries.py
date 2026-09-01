@@ -188,7 +188,7 @@ def get_company_history(conn: sqlite3.Connection, company_id: int) -> list[dict[
         JOIN search_results sr ON sr.search_id = s.id
         JOIN news n ON n.id = sr.news_id
         WHERE s.company_id = ?
-        ORDER BY COALESCE(n.published_at, n.fetched_at) DESC, s.searched_at DESC
+        ORDER BY sr.relevance DESC, COALESCE(n.published_at, n.fetched_at) DESC, s.searched_at DESC
         """,
         (company_id,),
     ).fetchall()
@@ -223,7 +223,7 @@ def get_new_since_last_search(
         JOIN search_results sr ON sr.news_id = n.id
         WHERE sr.search_id = (SELECT id FROM latest)
           AND n.id NOT IN (SELECT news_id FROM previous_news_ids)
-        ORDER BY COALESCE(n.published_at, n.fetched_at) DESC
+        ORDER BY sr.relevance DESC, COALESCE(n.published_at, n.fetched_at) DESC
         """,
         (company_id, topic_id),
     ).fetchall()
@@ -249,7 +249,7 @@ def get_latest_search_news(
         FROM news n
         JOIN search_results sr ON sr.news_id = n.id
         WHERE sr.search_id = (SELECT id FROM latest)
-        ORDER BY COALESCE(n.published_at, n.fetched_at) DESC
+        ORDER BY sr.relevance DESC, COALESCE(n.published_at, n.fetched_at) DESC
         """,
         (company_id, topic_id),
     ).fetchall()
