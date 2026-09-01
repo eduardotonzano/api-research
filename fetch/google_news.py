@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 import requests
 
+from topic_translation import translate_topic
+
 RSS_BASE_URL = "https://news.google.com/rss/search"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -134,13 +136,23 @@ def fetch_google_news_multi_locale(
 ) -> list[RssItem]:
     """Consulta o Google News RSS uma vez por região (pt-BR + en-US por
     padrão) e devolve a união deduplicada. Uma região fora do ar não derruba
-    as demais — mesmo padrão de fetch_portal_feed em fetch/portal_feeds.py."""
+    as demais — mesmo padrão de fetch_portal_feed em fetch/portal_feeds.py.
+
+    Mudar só hl/gl/ceid não basta pra achar cobertura em inglês: se o tópico
+    foi digitado em português (ex: "resultados"), essa palavra nunca aparece
+    numa matéria da Bloomberg/Reuters (que escrevem "earnings"). Por isso,
+    em toda região que não seja a do Brasil, a busca usa a tradução conhecida
+    do tópico (topic_translation.py); sem tradução conhecida, busca só a
+    empresa — melhor trazer notícia geral em inglês (a relevância depois
+    ordena) do que mandar uma palavra que nunca vai bater.
+    """
     locales = locales if locales is not None else DEFAULT_LOCALES
     all_items: list[RssItem] = []
     for hl, gl, ceid in locales:
+        query_topic = topic if gl == "BR" else (translate_topic(topic) or "")
         try:
             all_items.extend(
-                fetch_google_news(company, topic, hl=hl, gl=gl, ceid=ceid, session=session)
+                fetch_google_news(company, query_topic, hl=hl, gl=gl, ceid=ceid, session=session)
             )
         except requests.RequestException:
             continue

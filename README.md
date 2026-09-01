@@ -333,10 +333,50 @@ ruim" (notícia sem nenhuma relação com a empresa aparecendo no relatório).
   existindo (cobre o caso de ver uma notícia salva há semanas).
 - Stats novo: `skipped_stale`, mostrado na mensagem final do terminal.
 
+## Cobertura internacional ainda não aparecia — causa raiz era a língua da busca
+
+Depois da correção acima, o usuário testou de novo e continuou sem ver
+**nenhuma** notícia internacional. Investigando o código de novo, achei o
+motivo real: mudar `hl`/`gl`/`ceid` (região/idioma) do Google News **não
+traduz o texto da busca**. Se o tópico buscado é "resultados" (português), a
+consulta em inglês procura literalmente pela palavra "resultados" — que não
+existe em nenhuma matéria da Bloomberg/Reuters (eles escrevem "earnings",
+"results"). Por isso a passada em inglês sempre voltava vazia. O mesmo valia
+pro feed do Investing.com (que já é em inglês por padrão) — o filtro AND
+exigia o tópico em português bater num título em inglês, o que nunca acontece.
+
+Não existe serviço de tradução gratuito e confiável pra resolver isso (Google
+Translate é pago; alternativas gratuitas como LibreTranslate hoje exigem
+chave ou têm limite instável) — então a solução é um dicionário pequeno e
+explícito.
+
+**`topic_translation.py` (novo)**: `TOPIC_TRANSLATIONS`, ~25 termos
+financeiros comuns em português → inglês (resultados→earnings,
+dividendos→dividends, fusão→merger, dívida→debt, etc.), com
+`translate_topic()` — devolve `None` pra termo desconhecido, nunca inventa.
+
+- `fetch/google_news.py`: `fetch_google_news_multi_locale` agora usa a
+  tradução do tópico na passada em inglês; sem tradução conhecida, busca só
+  a empresa (nunca manda uma palavra em português que nunca vai bater).
+- `fetch/portal_feeds.py`: `matches_keywords` aceita o tópico traduzido como
+  alternativa ao original — o feed do Investing.com (inglês) passa a bater
+  de verdade. Adicionados também **MarketWatch** e **CNBC** (RSS gratuito,
+  sem chave) à lista de feeds — mídia internacional explícita, como pedido.
+
+⚠️ **Confirmei que este sandbox bloqueia esses hosts também** (mesma
+política que já bloqueava `news.google.com`) — testei conectividade direta
+com `curl` contra `news.google.com`, `investing.com`, `marketwatch.com` e
+`cnbc.com`: todos voltam 403 no proxy, então **não dá pra eu mesmo confirmar
+com uma busca real daqui**. A correção foi validada com testes automatizados
+(inspecionando os parâmetros exatos enviados pra cada requisição, com
+HTTP mockado) — a validação contra a internet real continua sendo você
+rodando no seu Codespace.
+
 ## Próximas fases
 
 Nenhuma fase planejada restante — a base (Fase 1), busca (Fase 2), resumo
 (Fase 3), comparação de histórico (Fase 4) e layout (Fase 5) foram
-implementadas, testadas, e ajustadas depois de dois testes reais (datas +
+implementadas, testadas, e ajustadas depois de três testes reais (datas +
 "retrato atual" + formulário web; cobertura internacional + filtro +
-relevância, acima). Próximos ajustes a partir daqui são sob demanda.
+relevância; tradução de tópico pra cobertura internacional de verdade,
+acima). Próximos ajustes a partir daqui são sob demanda.

@@ -157,8 +157,10 @@ class FakeSession:
     def __init__(self, response: FakeResponse | Exception | list):
         self._responses = response if isinstance(response, list) else [response]
         self.calls = 0
+        self.received_calls: list[dict] = []
 
     def get(self, *args, **kwargs):
+        self.received_calls.append(kwargs)
         response = self._responses[min(self.calls, len(self._responses) - 1)]
         self.calls += 1
         if isinstance(response, Exception):
@@ -244,6 +246,36 @@ def test_fetch_google_news_multi_locale_continues_when_one_locale_fails():
     assert {item.source for item in items} == {"Bloomberg", "Reuters"}
 
 
+def test_fetch_google_news_multi_locale_translates_topic_for_english_pass():
+    """Regressão da causa raiz: mandar 'resultados' pro Google News em
+    inglês nunca bate em nada real — a passada em inglês tem que usar a
+    tradução conhecida do tópico."""
+    session = FakeSession([
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS),
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS_EN),
+    ])
+    fetch_google_news_multi_locale("Petrobras", "resultados", session=session)
+
+    assert len(session.received_calls) == 2
+    pt_params = session.received_calls[0]["params"]
+    en_params = session.received_calls[1]["params"]
+    assert pt_params["q"] == "Petrobras resultados"
+    assert en_params["q"] == "Petrobras earnings"
+
+
+def test_fetch_google_news_multi_locale_falls_back_to_company_only_without_translation():
+    """Tópico sem tradução conhecida: a passada em inglês não manda a
+    palavra em português (nunca bateria) — busca só a empresa."""
+    session = FakeSession([
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS),
+        FakeResponse(text=SAMPLE_GOOGLE_NEWS_RSS_EN),
+    ])
+    fetch_google_news_multi_locale("Petrobras", "tópico-nunca-visto", session=session)
+
+    en_params = session.received_calls[1]["params"]
+    assert en_params["q"] == "Petrobras"
+
+
 # --- Feeds de portais ---
 
 
@@ -314,6 +346,44 @@ def test_search_portal_feeds_excludes_topic_only_matches():
         session=session,
     )
     assert items == []
+
+
+def test_matches_keywords_accepts_translated_topic_for_english_titles():
+    """Regressão da causa raiz: feed do Investing.com é em inglês — buscar
+    'resultados' precisa bater em 'earnings' no título."""
+    item = FeedItem(
+        title="Petrobras Reports Record Earnings for the Quarter",
+        link="x",
+        published_at=None,
+        source="Investing.com",
+    )
+    assert matches_keywords(item, company="Petrobras", topic="resultados")
+
+
+def test_matches_keywords_rejects_when_neither_original_nor_translation_match():
+    item = FeedItem(
+        title="Petrobras Announces New Board Member", link="x", published_at=None, source="X"
+    )
+    assert not matches_keywords(item, company="Petrobras", topic="resultados")
+
+
+def test_search_portal_feeds_matches_english_feed_via_topic_translation():
+    session = FakeSession(
+        FakeResponse(
+            text=SAMPLE_PORTAL_RSS.replace(
+                "Petrobras (PETR4) anuncia novo plano de investimentos",
+                "Petrobras Reports Record Earnings",
+            )
+        )
+    )
+    items = search_portal_feeds(
+        "Petrobras",
+        "resultados",
+        feeds={"MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories"},
+        session=session,
+    )
+    assert len(items) == 1
+    assert items[0].title == "Petrobras Reports Record Earnings"
 
 
 # --- Yahoo Finance ---

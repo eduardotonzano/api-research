@@ -1,8 +1,13 @@
-"""Feeds RSS de portais financeiros brasileiros.
+"""Feeds RSS de portais financeiros — brasileiros e internacionais.
 
 Diferente do Google News, esses feeds não são buscáveis por palavra-chave — eles
 só trazem o que o portal publicou recentemente. Por isso filtramos os itens do
 feed por menção à empresa (nome ou ticker) e ao tópico no título.
+
+Os feeds internacionais (Investing.com, MarketWatch, CNBC) são em inglês —
+buscar um tópico em português contra eles não bate por palavra nenhuma, por
+isso matches_keywords também aceita a tradução conhecida do tópico
+(topic_translation.py), não só o texto original.
 
 As URLs em PORTAL_FEEDS são de conhecimento público, mas portais mudam a
 estrutura/endereço do RSS sem aviso — confirme que ainda respondem antes de
@@ -16,6 +21,8 @@ from dataclasses import dataclass
 
 import requests
 
+from topic_translation import translate_topic
+
 from .google_news import REQUEST_TIMEOUT, USER_AGENT
 
 PORTAL_FEEDS = {
@@ -25,8 +32,14 @@ PORTAL_FEEDS = {
     # Investing.com não tem busca por empresa gratuita (a página de busca é
     # protegida por anti-bot) — usamos os feeds de categoria que eles mesmos
     # publicam pra sindicação, filtrados por palavra-chave como os demais.
+    # É em inglês por padrão (investing.com é o domínio internacional).
     "Investing.com": "https://www.investing.com/rss/news.rss",
     "Investing.com - Ações": "https://www.investing.com/rss/stock_Stock-Market-News.rss",
+    # Mídia internacional em inglês, gratuita, sem chave. Bloomberg em si não
+    # tem RSS/API gratuita de busca por empresa — não tem como incluir ela
+    # diretamente de graça.
+    "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "CNBC": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
 }
 
 
@@ -79,10 +92,11 @@ def matches_keywords(
 ) -> bool:
     """Um item só é relevante se citar a empresa (nome OU ticker) no título —
     isso é obrigatório, nunca opcional. Quando um tópico foi informado, o
-    título também precisa citar o tópico. Antes disso era 'basta bater
-    qualquer uma das três palavras', o que deixava passar notícia que só
-    menciona o tópico (ex: 'resultados') sem falar da empresa nenhuma — puro
-    ruído."""
+    título também precisa citar o tópico (no original OU na tradução
+    conhecida — feeds internacionais são em inglês, então 'resultados' nunca
+    aparece neles, só 'earnings'). Antes disso era 'basta bater qualquer uma
+    das três palavras', o que deixava passar notícia que só menciona o
+    tópico (ex: 'resultados') sem falar da empresa nenhuma — puro ruído."""
     haystack = item.title.lower()
 
     identity_terms = [term for term in (company, ticker) if term]
@@ -92,7 +106,10 @@ def matches_keywords(
     topic_clean = (topic or "").strip()
     if not topic_clean:
         return True
-    return topic_clean.lower() in haystack
+    if topic_clean.lower() in haystack:
+        return True
+    translated = translate_topic(topic_clean)
+    return bool(translated and translated.lower() in haystack)
 
 
 def search_portal_feeds(
